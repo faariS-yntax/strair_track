@@ -15,12 +15,15 @@ DATA_FILE = 'stairs_data.csv'
 # Function to load data
 def load_data():
     if os.path.exists(DATA_FILE):
-        return pd.read_csv(DATA_FILE, parse_dates=["Date"])
+        data = pd.read_csv(DATA_FILE, parse_dates=["Date"])
+        data['Date'] = pd.to_datetime(data['Date']).dt.date  # Convert to date only
+        return data
     else:
         return pd.DataFrame(columns=["Date", "Flights"])
 
 # Function to save data
 def save_data(data):
+    data['Date'] = pd.to_datetime(data['Date']).dt.date  # Ensure date-only format before saving
     data.to_csv(DATA_FILE, index=False)
 
 # Function to calculate averages
@@ -52,24 +55,25 @@ def predict_completion_date(data):
 def modify_data(data):
     if not data.empty:
         st.subheader("Edit or Delete Data")
-        date_to_modify = st.selectbox("Select Date to Edit/Delete", data["Date"].dt.strftime('%Y-%m-%d'))
+        date_to_modify = st.selectbox("Select Date to Edit/Delete", data["Date"].astype(str))  # Date as string
         if date_to_modify:
-            row = data[data["Date"].dt.strftime('%Y-%m-%d') == date_to_modify]
+            row = data[data["Date"].astype(str) == date_to_modify]
             st.write(f"Current Data for {date_to_modify}: {row['Flights'].values[0]} flights")
             
             # Edit the data
             if st.button("Edit Data"):
                 new_flights = st.number_input("New number of flights", value=int(row['Flights'].values[0]))
-                data.loc[data["Date"] == row['Date'].values[0], "Flights"] = new_flights
+                data.loc[data["Date"].astype(str) == date_to_modify, "Flights"] = new_flights
                 st.success("Data updated successfully!")
                 save_data(data)
             
             # Delete the data
             if st.button("Delete Data"):
-                data = data[data["Date"].dt.strftime('%Y-%m-%d') != date_to_modify]
+                data = data[data["Date"].astype(str) != date_to_modify]
                 st.success(f"Data for {date_to_modify} deleted.")
                 save_data(data)
     return data
+
 
 # Function to display metrics in a card-like style
 def display_card(title, value, unit=None):
@@ -212,12 +216,12 @@ elif selected == "Data Entry":
     # Add today's data
     with st.container(border=True):
         st.subheader("Add Today's Flights")
-        today = st.date_input("Date", datetime.today())
+        today = st.date_input("Date", datetime.today()).strftime('%Y-%m-%d')  # Only keep the date part
         flights = st.number_input("Number of flights climbed today", min_value=0, step=1)
 
         # Add data to the table
         if st.button("Add Entry"):
-            if today in data['Date'].values:
+            if today in data['Date'].astype(str).values:  # Check date string, no time part
                 st.warning("You've already added data for today.")
             else:
                 new_entry = pd.DataFrame({"Date": [today], "Flights": [flights]})
@@ -225,6 +229,7 @@ elif selected == "Data Entry":
                 save_data(data)
                 st.success("Entry added!")
                 st.balloons()
+
     
     # Edit or delete data
     with st.container(border=True):
