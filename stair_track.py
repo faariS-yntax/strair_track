@@ -29,6 +29,10 @@ def save_data(data):
 # Function to calculate averages
 def calculate_averages(data):
     if not data.empty:
+        # Ensure 'Date' column is in datetime format
+        data['Date'] = pd.to_datetime(data['Date'], errors='coerce')
+
+        # Now you can safely use the .dt accessor
         data['Week'] = data['Date'].dt.isocalendar().week
         data['Month'] = data['Date'].dt.month
         
@@ -37,6 +41,7 @@ def calculate_averages(data):
         monthly_avg = data.groupby('Month')['Flights'].sum().mean()
     else:
         daily_avg, weekly_avg, monthly_avg = 0, 0, 0
+        
     return daily_avg, weekly_avg, monthly_avg
 
 # Predict completion date based on current progress
@@ -74,24 +79,53 @@ def modify_data(data):
                 save_data(data)
     return data
 
+# Main layout
+st.set_page_config(page_title="Stair Trek 🧗‍♂️🏔️", layout="wide")
+st.title("Stair Trek 🧗‍♂️🏔️")
+st.write("Track your progress toward climbing the height of Gunung Kinabalu!")
+
+# Custom CSS for uniform card styling
+st.markdown("""
+    <style>
+    .card {
+        background-color: #2b2b2b; 
+        padding: 15px; 
+        border-radius: 10px; 
+        box-shadow: 2px 2px 8px rgba(0,0,0,0.1); 
+        text-align: center; 
+        height: 200px;  /* Uniform height */
+        margin: 10px;   /* Uniform margin */
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+    }
+    .card h4 {
+        color: #fafafa;
+        margin-bottom: 10px;
+    }
+    .card h1 {
+        color: #adadad;
+        font-size: 36px;
+        margin: 0;
+    }
+    .card h6 {
+        color: #fafafa;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
 # Function to display metrics in a card-like style
 def display_card(title, value, unit=None):
     st.markdown(
         f"""
-        <div style="background-color: #2b2b2b; padding: 15px; border-radius: 10px; box-shadow: 2px 2px 8px rgba(0,0,0,0.1); text-align: center;">
-            <h4 style="color: #fafafa;">{title}</h4>
-            <h1 style="color: #adadad; font-size: 36px; margin: ;">{value}</h1>
-            {"<h6 style='color: #fafafa;'>" + unit + "</h6>" if unit else ""}
+        <div class="card">
+            <h4>{title}</h4>
+            <h1>{value}</h1>
+            {"<h6>" + unit + "</h6>" if unit else ""}
         </div>
         """,
         unsafe_allow_html=True
     )
-
-# Main layout
-st.set_page_config(page_title="Stair Trek 🧗‍♂️🏔️", layout="wide")
-st.title("Stair Trek 🧗‍♂️🏔️")
-st.write("Track your progress toward climbing the height of Gunung Kinabalu!")
 
 # Sidebar menu for tabs
 selected = option_menu(
@@ -158,11 +192,9 @@ if selected == "Dashboard":
                 st.plotly_chart(weekly_fig)
                 st.plotly_chart(monthly_fig)
 
-    
-
     # Row 2: Display Progress Metrics
     with st.container(border=True):
-        st.subheader("Progress")
+        st.subheader("Progress", )
         col_1, col_2, col_3 = st.columns(3)
         progress = total_flights / TOTAL_FLIGHTS_KINABALU * 100
         
@@ -176,9 +208,7 @@ if selected == "Dashboard":
             display_card("Progress", f"{progress:.2f}%", None)
 
         # Progress bar
-        st.progress(progress / 100) 
-
-    
+        st.progress(progress / 100)
 
     # Row 3: Completion Prediction Metrics
     with st.container(border=True):
@@ -192,8 +222,6 @@ if selected == "Dashboard":
 
         with col_2_completion:
             display_card("Days Remaining", days_remaining if days_remaining else "N/A", "days")
-
-    
 
     # Row 4: Display Averages Metrics
     with st.container(border=True):
@@ -241,7 +269,7 @@ elif selected == "Historical Data":
 
     # Display data
     st.subheader("Flight of Stairs History")
-    st.write(data)
+    st.dataframe(data, use_container_width=True)
     
     # Add a reset button to clear all data
     if st.button("Reset Data"):
