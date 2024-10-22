@@ -7,32 +7,35 @@ from datetime import datetime, timedelta
 from streamlit_option_menu import option_menu
 
 # Constants
-TOTAL_HEIGHT_KINABALU = 13435  # Height of Gunung Kinabalu in feet
-HEIGHT_PER_FLIGHT = 8          # Each flight is roughly 8 feet
-TOTAL_FLIGHTS_KINABALU = TOTAL_HEIGHT_KINABALU / HEIGHT_PER_FLIGHT  # Total flights
+TOTAL_HEIGHT_KINABALU_FT = 13435  # Height in feet
+TOTAL_HEIGHT_KINABALU_M = 4095    # Height in meters
+HEIGHT_PER_FLIGHT_FT = 8          # Each flight in feet
+HEIGHT_PER_FLIGHT_M = 2.4         # Each flight in meters
 DATA_FILE = 'stairs_data.csv'
+
+# Function to get heights based on selected unit
+def get_heights(unit='ft'):
+    if unit == 'ft':
+        return TOTAL_HEIGHT_KINABALU_FT, HEIGHT_PER_FLIGHT_FT
+    return TOTAL_HEIGHT_KINABALU_M, HEIGHT_PER_FLIGHT_M
 
 # Function to load data
 def load_data():
     if os.path.exists(DATA_FILE):
         data = pd.read_csv(DATA_FILE, parse_dates=["Date"])
-        data['Date'] = pd.to_datetime(data['Date']).dt.date  # Convert to date only
+        data['Date'] = pd.to_datetime(data['Date']).dt.date
         return data
-    else:
-        return pd.DataFrame(columns=["Date", "Flights"])
+    return pd.DataFrame(columns=["Date", "Flights"])
 
 # Function to save data
 def save_data(data):
-    data['Date'] = pd.to_datetime(data['Date']).dt.date  # Ensure date-only format before saving
+    data['Date'] = pd.to_datetime(data['Date']).dt.date
     data.to_csv(DATA_FILE, index=False)
 
 # Function to calculate averages
 def calculate_averages(data):
     if not data.empty:
-        # Ensure 'Date' column is in datetime format
         data['Date'] = pd.to_datetime(data['Date'], errors='coerce')
-
-        # Now you can safely use the .dt accessor
         data['Week'] = data['Date'].dt.isocalendar().week
         data['Month'] = data['Date'].dt.month
         
@@ -44,45 +47,92 @@ def calculate_averages(data):
         
     return daily_avg, weekly_avg, monthly_avg
 
-# Predict completion date based on current progress
-def predict_completion_date(data):
-    if not data.empty:
-        total_flights_climbed = data['Flights'].sum()
-        daily_avg = data.groupby('Date')['Flights'].sum().mean()
-        if daily_avg > 0:
-            remaining_flights = TOTAL_FLIGHTS_KINABALU - total_flights_climbed
-            days_to_completion = remaining_flights / daily_avg
-            completion_date = datetime.today() + timedelta(days=days_to_completion)
-            return completion_date.strftime('%Y-%m-%d'), int(days_to_completion)
-    return None, None
+# Enhanced prediction function with trend analysis
+def predict_completion_date(data, previous_completion_date=None):
+    if data.empty:
+        return None, None, None, 0
+    
+    total_flights_climbed = data['Flights'].sum()
+    daily_avg = data.groupby('Date')['Flights'].sum().mean()
+    
+    if daily_avg > 0:
+        total_height, height_per_flight = get_heights(st.session_state.unit)
+        total_flights_needed = total_height / height_per_flight
+        remaining_flights = total_flights_needed - total_flights_climbed
+        days_to_completion = remaining_flights / daily_avg
+        completion_date = datetime.today() + timedelta(days=days_to_completion)
+        
+        # Calculate trend
+        if previous_completion_date:
+            previous_date = datetime.strptime(previous_completion_date, '%Y-%m-%d')
+            trend = (previous_date - completion_date).days
+        else:
+            trend = 0
+            
+        # Calculate performance score (0-100)
+        target_daily_avg = total_flights_needed / 365  # Assuming one year target
+        performance_score = min((daily_avg / target_daily_avg) * 100, 100)
+        
+        return completion_date.strftime('%Y-%m-%d'), int(days_to_completion), trend, performance_score
+    
+    return None, None, None, 0
 
-# Edit or delete data
+# Function to analyze progress
+def analyze_progress(data):
+    if data.empty or len(data) < 2:
+        return "Not enough data for analysis"
+    
+    latest_date = data['Date'].max()
+    latest_flights = data[data['Date'] == latest_date]['Flights'].iloc[0]
+    previous_date = data[data['Date'] < latest_date]['Date'].max()
+    previous_flights = data[data['Date'] == previous_date]['Flights'].iloc[0]
+    
+    daily_change = latest_flights - previous_flights
+    daily_change_pct = (daily_change / previous_flights) * 100 if previous_flights > 0 else 0
+    
+    if daily_change > 0:
+        return f"📈 Great progress! You climbed {daily_change} more flights than your previous entry ({daily_change_pct:.1f}% increase)"
+    elif daily_change < 0:
+        return f"📉 You climbed {abs(daily_change)} fewer flights than your previous entry ({abs(daily_change_pct):.1f}% decrease)"
+    return "➡️ Same number of flights as your previous entry"
+
+# Function to modify data
 def modify_data(data):
     if not data.empty:
         st.subheader("Edit or Delete Data")
-        date_to_modify = st.selectbox("Select Date to Edit/Delete", data["Date"].astype(str))  # Date as string
+        date_to_modify = st.selectbox("Select Date to Edit/Delete", data["Date"].astype(str))
         if date_to_modify:
             row = data[data["Date"].astype(str) == date_to_modify]
             st.write(f"Current Data for {date_to_modify}: {row['Flights'].values[0]} flights")
             
-            # Edit the data
-            if st.button("Edit Data"):
-                new_flights = st.number_input("New number of flights", value=int(row['Flights'].values[0]))
-                data.loc[data["Date"].astype(str) == date_to_modify, "Flights"] = new_flights
-                st.success("Data updated successfully!")
-                save_data(data)
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("Edit Data"):
+                    new_flights = st.number_input("New number of flights", value=int(row['Flights'].values[0]))
+                    data.loc[data["Date"].astype(str) == date_to_modify, "Flights"] = new_flights
+                    st.success("Data updated successfully!")
+                    save_data(data)
             
-            # Delete the data
-            if st.button("Delete Data"):
-                data = data[data["Date"].astype(str) != date_to_modify]
-                st.success(f"Data for {date_to_modify} deleted.")
-                save_data(data)
+            with col2:
+                if st.button("Delete Data"):
+                    data = data[data["Date"].astype(str) != date_to_modify]
+                    st.success(f"Data for {date_to_modify} deleted.")
+                    save_data(data)
     return data
 
 # Main layout
 st.set_page_config(page_title="Stair Trek 🧗‍♂️🏔️", layout="wide")
 st.title("Stair Trek 🧗‍♂️🏔️")
-st.write("Track your progress toward climbing the height of Gunung Kinabalu!")
+
+# Initialize session state for unit preference
+if 'unit' not in st.session_state:
+    st.session_state.unit = 'ft'
+if 'previous_completion_date' not in st.session_state:
+    st.session_state.previous_completion_date = None
+
+# Unit selection in sidebar
+st.sidebar.title("Settings")
+st.session_state.unit = st.sidebar.radio("Select Unit", ['ft', 'm'])
 
 # Custom CSS for uniform card styling
 st.markdown("""
@@ -93,8 +143,8 @@ st.markdown("""
         border-radius: 10px; 
         box-shadow: 2px 2px 8px rgba(0,0,0,0.1); 
         text-align: center; 
-        height: 200px;  /* Uniform height */
-        margin: 10px;   /* Uniform margin */
+        height: 200px;
+        margin: 10px;
         display: flex;
         flex-direction: column;
         justify-content: center;
@@ -115,12 +165,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Function to display metrics in a card-like style
-def display_card(title, value, unit=None):
+def display_card(title, value, unit=None, color=None):
+    color_style = f"color: {color};" if color else ""
     st.markdown(
         f"""
         <div class="card">
             <h4>{title}</h4>
-            <h1>{value}</h1>
+            <h1 style="{color_style}">{value}</h1>
             {"<h6>" + unit + "</h6>" if unit else ""}
         </div>
         """,
@@ -129,11 +180,11 @@ def display_card(title, value, unit=None):
 
 # Sidebar menu for tabs
 selected = option_menu(
-    menu_title="Main Menu",  # required
-    options=["Dashboard", "Data Entry", "Historical Data"],  # required
-    icons=["bar-chart", "pencil-square", "archive"],  # optional
-    menu_icon="cast",  # optional
-    default_index=0,  # optional
+    menu_title="Main Menu",
+    options=["Dashboard", "Data Entry", "Historical Data"],
+    icons=["bar-chart", "pencil-square", "archive"],
+    menu_icon="cast",
+    default_index=0,
     orientation="horizontal",
 )
 
@@ -144,16 +195,35 @@ data = load_data()
 if selected == "Dashboard":
     st.header("Dashboard")
     
+    # Row 1: Progress Analysis
+    with st.container(border=True):
+        st.subheader("Progress Insights")
+        if not data.empty:
+            progress_analysis = analyze_progress(data)
+            st.write(progress_analysis)
+            
+            completion_date, days_remaining, trend, performance_score = predict_completion_date(
+                data, st.session_state.previous_completion_date)
+            
+            if performance_score > 0:
+                if performance_score >= 90:
+                    st.success(f"🌟 Outstanding progress! You're performing at {performance_score:.1f}% of target pace!")
+                elif performance_score >= 70:
+                    st.info(f"👍 Good progress! You're performing at {performance_score:.1f}% of target pace.")
+                else:
+                    st.warning(f"💪 Keep pushing! You're at {performance_score:.1f}% of target pace.")
 
-    # Row 1: Comparison chart (left) and Averages graphs (right)
-    col_left, col_right = st.columns(2, gap="medium", )
+    # Row 2: Visualization columns
+    col_left, col_right = st.columns(2)
 
     with col_left:
-        # Comparison graph: Height Climbed vs Gunung Kinabalu
+        # Progress comparison graph
         with st.container(border=True):
             st.subheader("Progress")
+            total_height, height_per_flight = get_heights(st.session_state.unit)
             total_flights = data['Flights'].sum()
-            height_climbed = total_flights * HEIGHT_PER_FLIGHT
+            height_climbed = total_flights * height_per_flight
+            
             fig = go.Figure()
             fig.add_trace(go.Bar(
                 x=['Your Progress'],
@@ -163,67 +233,96 @@ if selected == "Dashboard":
             ))
             fig.add_trace(go.Bar(
                 x=['Gunung Kinabalu'],
-                y=[TOTAL_HEIGHT_KINABALU],
+                y=[total_height],
                 name='Gunung Kinabalu',
                 marker_color='lightgreen'
             ))
-            fig.update_layout(title="Comparison: Your Climb vs Gunung Kinabalu",
-                            yaxis=dict(title='Height (in feet)'),
-                            xaxis=dict(title='Comparison'),
-                            showlegend=False,
-                            yaxis_range=[0, TOTAL_HEIGHT_KINABALU])
+            fig.update_layout(
+                title=f"Comparison: Your Climb vs Gunung Kinabalu ({st.session_state.unit})",
+                yaxis=dict(title=f'Height ({st.session_state.unit})'),
+                xaxis=dict(title='Comparison'),
+                showlegend=False,
+                yaxis_range=[0, total_height]
+            )
             st.plotly_chart(fig)
 
     with col_right:
-        # Display averages in 3 stacked plots: Daily, Weekly, Monthly patterns
+        # Averages graphs
         with st.container(border=True):
             st.subheader("Averages Over Time")
             daily_avg, weekly_avg, monthly_avg = calculate_averages(data)
 
             if not data.empty:
-                daily_fig = px.line(data.groupby('Date')['Flights'].sum().reset_index(), x='Date', y='Flights',
-                                    title='Daily Flights Pattern')
-                weekly_fig = px.line(data.groupby('Week')['Flights'].sum().reset_index(), x='Week', y='Flights',
-                                    title='Weekly Flights Pattern')
-                monthly_fig = px.line(data.groupby('Month')['Flights'].sum().reset_index(), x='Month', y='Flights',
-                                    title='Monthly Flights Pattern')
+                daily_fig = px.line(
+                    data.groupby('Date')['Flights'].sum().reset_index(),
+                    x='Date',
+                    y='Flights',
+                    title='Daily Flights Pattern'
+                )
+                weekly_fig = px.line(
+                    data.groupby('Week')['Flights'].sum().reset_index(),
+                    x='Week',
+                    y='Flights',
+                    title='Weekly Flights Pattern'
+                )
+                monthly_fig = px.line(
+                    data.groupby('Month')['Flights'].sum().reset_index(),
+                    x='Month',
+                    y='Flights',
+                    title='Monthly Flights Pattern'
+                )
                 
                 st.plotly_chart(daily_fig)
                 st.plotly_chart(weekly_fig)
                 st.plotly_chart(monthly_fig)
 
-    # Row 2: Display Progress Metrics
+    # Row 3: Progress Metrics
     with st.container(border=True):
-        st.subheader("Progress", )
+        st.subheader("Progress")
         col_1, col_2, col_3 = st.columns(3)
-        progress = total_flights / TOTAL_FLIGHTS_KINABALU * 100
+        progress = (height_climbed / total_height) * 100
         
         with col_1:
             display_card("Flights Climbed", total_flights, "flights")
-
+        
         with col_2:
-            display_card("Height Climbed", f"{height_climbed:.2f}", "feet")
-
+            display_card("Height Climbed", f"{height_climbed:.2f}", st.session_state.unit)
+        
         with col_3:
-            display_card("Progress", f"{progress:.2f}%", None)
+            display_card("Progress", f"{progress:.2f}%")
 
-        # Progress bar
         st.progress(progress / 100)
 
-    # Row 3: Completion Prediction Metrics
+    # Row 4: Completion Prediction
     with st.container(border=True):
         st.subheader("Predictions")
-        completion_date, days_remaining = predict_completion_date(data)
-
         col_1_completion, col_2_completion = st.columns(2)
-
+        
+        completion_color = None
+        if trend > 0:
+            completion_color = "red"
+        elif trend < 0:
+            completion_color = "green"
+        
         with col_1_completion:
-            display_card("Estimated Completion Date", completion_date if completion_date else "N/A")
+            display_card(
+                "Estimated Completion Date",
+                completion_date if completion_date else "N/A",
+                color=completion_color
+            )
+            if trend:
+                trend_text = f"{'🔴 +' if trend > 0 else '🟢 -'}{abs(trend)} days change"
+                st.write(trend_text)
 
         with col_2_completion:
-            display_card("Days Remaining", days_remaining if days_remaining else "N/A", "days")
+            display_card(
+                "Days Remaining",
+                days_remaining if days_remaining else "N/A",
+                "days",
+                color=completion_color
+            )
 
-    # Row 4: Display Averages Metrics
+    # Row 5: Averages
     with st.container(border=True):
         st.subheader("Averages")
         col_1_avg, col_2_avg, col_3_avg = st.columns(3)
@@ -244,12 +343,11 @@ elif selected == "Data Entry":
     # Add today's data
     with st.container(border=True):
         st.subheader("Add Today's Flights")
-        today = st.date_input("Date", datetime.today()).strftime('%Y-%m-%d')  # Only keep the date part
+        today = st.date_input("Date", datetime.today()).strftime('%Y-%m-%d')
         flights = st.number_input("Number of flights climbed today", min_value=0, step=1)
 
-        # Add data to the table
         if st.button("Add Entry"):
-            if today in data['Date'].astype(str).values:  # Check date string, no time part
+            if today in data['Date'].astype(str).values:
                 st.warning("You've already added data for today.")
             else:
                 new_entry = pd.DataFrame({"Date": [today], "Flights": [flights]})
@@ -258,12 +356,11 @@ elif selected == "Data Entry":
                 st.success("Entry added!")
                 st.balloons()
 
-    
     # Edit or delete data
     with st.container(border=True):
         data = modify_data(data)
 
-# Historical Data
+# Historical Data Tab
 elif selected == "Historical Data":
     st.header("Historical Data")
 
@@ -271,7 +368,7 @@ elif selected == "Historical Data":
     st.subheader("Flight of Stairs History")
     st.dataframe(data, use_container_width=True)
     
-    # Add a reset button to clear all data
+    # Reset button
     if st.button("Reset Data"):
         data = pd.DataFrame(columns=["Date", "Flights"])
         save_data(data)
